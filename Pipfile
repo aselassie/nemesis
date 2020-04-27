@@ -8,7 +8,7 @@ jupyter = "*"
 
 [packages]
 pipenv = "*"
-django = "==2.2"
+django = "==2.2.10"
 psycopg2-binary = "*"
 python-dotenv = "*"
 django-extensions = "*"
