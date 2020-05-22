@@ -2,15 +2,19 @@ from lxml import etree
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
-from core.models import TickerMap
 
 
 def read_xml(link):
     r = requests.get(f"{link}")
     doc = r.text
-
-    root = etree.fromstring(doc)
-    ns = f"{{{root.nsmap['n1']}}}"
+    print(link)
+    try:
+        root = etree.fromstring(doc)
+    except ValueError:
+        xml = bytes(bytearray(doc, encoding='utf-8'))
+        root = etree.XML(xml)
+    key = list(root.nsmap.keys())[0]
+    ns = f"{{{root.nsmap[key]}}}"
 
     all_rows = []
 
@@ -66,8 +70,6 @@ def get_links_from_cik(cik):
 def get_xml_links_from_table_link(single_link):
     soup = BeautifulSoup(requests.get(single_link).text, 'html.parser')
     table = soup.find("table")
-    col_names = [col.text for col in table.findAll("th")]
-    col_names
     all_rows = []
     for row in table.findAll("tr"):
         single_row = []
@@ -82,7 +84,7 @@ def get_xml_links_from_table_link(single_link):
     all_rows.loc[:, 6] = [s[-1] for s in all_rows.iloc[:, 3].str.split(".")]
     xml_rows = all_rows[all_rows.iloc[:, 6] == 'xml']
     try:
-        infotable_link =  xml_rows[xml_rows.iloc[:, 4].str.upper() == 'INFORMATION TABLE'].iloc[0, 2]
+        infotable_link = xml_rows[xml_rows.iloc[:, 4].str.upper() == 'INFORMATION TABLE'].iloc[0, 2]
     except IndexError:
         file_format = all_rows[all_rows.iloc[:, 4].str.upper().str.contains('13F')].iloc[0, 6]
         if file_format == 'txt':
@@ -102,24 +104,25 @@ def get_date_from_xml(link):
     return report_date
 
 
-def read_xml_dictionary(links_dictionary, cusip_map):
-    data_output = read_xml(links_dictionary['infotable_link'])
-    data_output = data_output.set_index("cusip").join(cusip_map)
+def read_xml_dictionary(links_dictionary):
+    data_output = read_xml(links_dictionary['infotable_link']).set_index("cusip")
     report_date = get_date_from_xml(links_dictionary['primary_doc_link'])
     data_output.loc[:, "report_date"] = report_date
     return data_output
 
 
-def get_all_filings(cik):
-    cusip_map = pd.DataFrame(TickerMap.objects.all().values("cusip", 'ticker')).set_index("cusip")
+def get_all_filings(cik, last_n=None):
     single_fund_collection = []
-    all_links = get_links_from_cik(cik)
+    all_links = get_links_from_cik(cik)[:last_n]
     for link in all_links:
         single_dictionary = get_xml_links_from_table_link(link)
-        single_fund_collection.append(single_dictionary)
+        if single_dictionary['infotable_link'] and single_dictionary['primary_doc_link']:
+            single_fund_collection.append(single_dictionary)
 
-    all_filings = pd.DataFrame()
+    all_filings = []
     for single_dictionary in single_fund_collection:
-        single_df = read_xml_dictionary(single_dictionary, cusip_map)
-        all_filings = pd.concat([all_filings, single_df])
+        single_df = read_xml_dictionary(single_dictionary)
+        all_filings.append(single_df)
+    all_filings = pd.concat(all_filings)
+    all_filings.loc[:, "report_date"] = pd.to_datetime(all_filings.report_date).dt.date
     return all_filings

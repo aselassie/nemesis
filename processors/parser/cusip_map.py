@@ -33,39 +33,37 @@ def parse_fail_to_deliver(url):
 
 
 def generate_cusip_map(start_date, end_date):
-    daterange = pd.date_range(start=start_date, end=end_date, freq="M")
-    daterange = daterange.strftime("%Y%m")
+    dates_list = pd.date_range(start=start_date, end=end_date, freq="M")
+    expanded_date_list = []
+    daterange = dates_list.strftime("%Y%m")
     search_list = []
-    for month in daterange:
+    for i, month in enumerate(daterange):
         for letter in ['a', 'b']:
             search_str = f"{month}{letter}"
             search_list.append(search_str)
+            expanded_date_list.append(dates_list[i])
 
     all_maps = pd.DataFrame()
-    for entry in search_list:
+    for time_stamp, entry in zip(expanded_date_list, search_list):
         single_map = parse_fail_to_deliver(entry)
+        single_map.loc[:, "date"] = time_stamp
         all_maps = pd.concat([all_maps, single_map]).drop_duplicates()
-    all_maps.columns = ['cusip', 'symbol']
+    all_maps.columns = ['cusip', 'ticker', 'as_of_date']
     all_maps = all_maps.drop_duplicates()
     all_maps = all_maps.set_index("cusip")
     return all_maps
 
 
 def save_to_db(output):
-    cleaned_output = output.reset_index().rename({"symbol": "ticker"}, axis=1)
-    existing = pd.DataFrame(TickerMap.objects.all().values("cusip", 'ticker', "id"))
+    cleaned_output = output.reset_index().groupby(["cusip", 'ticker']).last().reset_index()
+    ticker_set = cleaned_output.to_dict("records")
+    existing = pd.DataFrame(TickerMap.objects.values("ticker", "cusip"))
     if not existing.empty:
-        existing = existing.set_index(['cusip', 'ticker'])
-        merged = cleaned_output.set_index(['cusip', 'ticker']).join(existing)
-        merged = merged[~merged.id.isnull()].drop("id", axis=1)
-        merged = merged.reset_index().to_dict(orient='records')
+        existing = (existing['ticker'] + "-" + existing['cusip']).values.tolist()
+        filtered_ticker_set = [entry for entry in ticker_set if f"{entry['ticker']}-{entry['cusip']}" not in existing]
     else:
-        merged = cleaned_output.reset_index().to_dict(orient='records')
-    new_entries = []
-    for single_entry in merged:
-        new_ticker = TickerMap(ticker=single_entry['ticker'], cusip=single_entry['cusip'])
-        new_entries.append(new_ticker)
-    TickerMap.objects.bulk_create(new_entries)
+        filtered_ticker_set = ticker_set
+    TickerMap.objects.bulk_create([TickerMap(**s) for s in filtered_ticker_set])
 
 
 def generate_and_save(start_date, end_date):
